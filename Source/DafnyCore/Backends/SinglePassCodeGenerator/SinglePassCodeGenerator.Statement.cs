@@ -18,6 +18,7 @@ using static Microsoft.Dafny.GeneratorErrors;
 
 namespace Microsoft.Dafny.Compilers {
   public abstract partial class SinglePassCodeGenerator {
+
     protected void TrStmt(Statement stmt, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts = null) {
       Contract.Requires(stmt != null);
       Contract.Requires(wr != null);
@@ -25,6 +26,14 @@ namespace Microsoft.Dafny.Compilers {
       wStmts ??= wr.Fork();
 
       if (stmt.IsGhost) {
+        switch (stmt) {
+          case AssertStmt assertStmt: {
+              wr.Write($"Assert(");
+              EmitExpr(assertStmt.Expr, false, wr, wStmts);
+              wr.WriteLine(")");
+              break;
+            }
+        }
         return;
       }
       switch (stmt) {
@@ -263,12 +272,26 @@ namespace Microsoft.Dafny.Compilers {
               // This loop is allowed to stop iterating at any time. We choose to never iterate, but we still
               // emit a loop structure. The structure "while (false) { }" comes to mind, but that results in
               // an "unreachable code" error from Java, so we instead use "while (true) { break; }".
-              var wBody = CreateWhileLoop(out var guardWriter, wr);
+              var wBody = CreateWhileLoop(out var guardWriter, out var annotWriter, wr);
               EmitExpr(Expression.CreateBoolLiteral(s.Body.tok, true), false, guardWriter, wStmts);
               EmitBreak(null, wBody);
               Coverage.UnusedInstrumentationPoint(s.Body.Tok, "while body");
             } else {
-              var guardWriter = EmitWhile(s.Body.Tok, s.Body.Body, s.Labels, wr);
+              var wBody = CreateWhileLoop(out var guardWriter, out var annotWriter, wr);
+              foreach (var (name, type) in list_decls) {
+                GenerateAccessInv(name, type, "Invariant", new List<string>(), annotWriter);
+              }
+              foreach (AttributedExpression inv in s.Invariants) {
+                annotWriter.Write($"Invariant(");
+                EmitExpr(inv.E, false, annotWriter, wStmts);
+                annotWriter.WriteLine(")");
+              }
+              foreach (Expression ens in s.Decreases.Expressions) {
+                annotWriter.WriteLine($"#decreases {ens}");
+              }
+              wBody = EmitContinueLabel(s.Labels, wBody);
+              Coverage.Instrument(s.Body.Tok, "while body", wBody);
+              TrStmtList(s.Body.Body, wBody);
               EmitExpr(s.Guard, false, guardWriter, wStmts);
             }
 
@@ -279,7 +302,7 @@ namespace Microsoft.Dafny.Compilers {
               Error(ErrorId.c_case_based_loop_forbidden, loopStmt.Tok, "case-based loop forbidden by the --enforce-determinism option", wr);
             }
             if (loopStmt.Alternatives.Count != 0) {
-              var w = CreateWhileLoop(out var whileGuardWriter, wr);
+              var w = CreateWhileLoop(out var whileGuardWriter, out var annotWriter, wr);
               EmitExpr(Expression.CreateBoolLiteral(loopStmt.tok, true), false, whileGuardWriter, wStmts);
               w = EmitContinueLabel(loopStmt.Labels, w);
               foreach (var alternative in loopStmt.Alternatives) {
@@ -308,7 +331,18 @@ namespace Microsoft.Dafny.Compilers {
               wStmts = wr.Fork();
               EmitExpr(s.End, false, DeclareLocalVar(endVarName, s.End.Type, s.End.tok, wr), wStmts);
             }
-            var startExprWriter = EmitForStmt(s.Tok, s.LoopIndex, s.GoingUp, endVarName, s.Body.Body, s.Labels, wr);
+            var startExprWriter = EmitForStmt(s.Tok, s.LoopIndex, s.GoingUp, endVarName, s.Body.Body, s.Labels, out var annotWriter, wr);
+            foreach (var (name, type) in list_decls) {
+              GenerateAccessInv(name, type, "Invariant", new List<string>(), annotWriter);
+            }
+            foreach (AttributedExpression inv in s.Invariants) {
+              annotWriter.Write($"Invariant(");
+              EmitExpr(inv.E, false, annotWriter, wStmts);
+              annotWriter.WriteLine(")");
+            }
+            foreach (Expression ens in s.Decreases.Expressions) {
+              annotWriter.WriteLine($"#decreases {ens}");
+            }
             EmitExpr(s.Start, false, startExprWriter, wStmts);
             break;
           }
@@ -443,14 +477,14 @@ namespace Microsoft.Dafny.Compilers {
             var i = 0;
             foreach (var local in s.Locals) {
               bool hasRhs = s.Update is AssignSuchThatStmt || s.Update is AssignOrReturnStmt;
-              if (!hasRhs && s.Update is UpdateStmt u) {
-                if (i < u.Rhss.Count && u.Rhss[i] is HavocRhs) {
-                  // there's no specific initial value
-                } else {
-                  hasRhs = true;
-                }
-              }
-              TrLocalVar(local, !hasRhs, wr);
+              // if (!hasRhs && s.Update is UpdateStmt u) {
+              //   if (i < u.Rhss.Count && u.Rhss[i] is HavocRhs) {
+              //     // there's no specific initial value
+              //   } else {
+              //     hasRhs = true;
+              //   }
+              // }
+              TrLocalVar(local, true, wr);
               i++;
             }
             if (s.Update != null) {

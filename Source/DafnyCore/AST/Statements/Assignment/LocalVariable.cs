@@ -80,8 +80,14 @@ public class LocalVariable : RangeNode, IVariable, IAttributeBearingDeclaration 
     sanitizedName ??= $"_{IVariable.CompileNameIdGenerator.FreshNumericId()}_{SanitizedNameShadowable}";
 
   string compileName;
-  public string CompileName =>
-    compileName ??= SanitizedName;
+  public string CompileName {
+    get {
+      return compileName ??= SanitizedName;
+    }
+    set {
+      compileName = value;
+    }
+  }
 
   // TODO rename and update comment? Or make it nullable?
   public readonly Type SyntacticType;  // this is the type mentioned in the declaration, if any

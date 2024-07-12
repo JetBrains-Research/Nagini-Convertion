@@ -1242,7 +1242,7 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected override ConcreteSyntaxTree EmitForStmt(IToken tok, IVariable loopIndex, bool goingUp, string /*?*/ endVarName,
-      List<Statement> body, LList<Label> labels, ConcreteSyntaxTree wr) {
+      List<Statement> body, LList<Label> labels, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
 
       var nativeType = AsNativeType(loopIndex.Type);
 
@@ -1280,6 +1280,7 @@ namespace Microsoft.Dafny.Compilers {
         }
       }
       bodyWr = EmitContinueLabel(labels, bodyWr);
+      annotWriter = bodyWr.Fork();
       TrStmtList(body, bodyWr);
 
       return startWr;

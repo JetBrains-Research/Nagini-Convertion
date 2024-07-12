@@ -17,7 +17,7 @@ public class UserDefinedType : NonProxyType, IHasReferences {
   }
 
   public readonly Expression NamePath;  // either NameSegment or ExprDotName (with the inner expression satisfying this same constraint)
-  public readonly string Name;
+  public string Name;
   [Rep]
 
   public string FullName {

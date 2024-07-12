@@ -2065,15 +2065,16 @@ namespace Microsoft.Dafny.Compilers {
       }
     }
 
-    protected override ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, ConcreteSyntaxTree wr) {
+    protected override ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
       wr.Write("for ");
       guardWriter = wr.Fork();
       var wBody = wr.NewBlock("");
+      annotWriter = wr.Fork();
       return wBody;
     }
 
     protected override ConcreteSyntaxTree EmitForStmt(IToken tok, IVariable loopIndex, bool goingUp, string /*?*/ endVarName,
-      List<Statement> body, LList<Label> labels, ConcreteSyntaxTree wr) {
+      List<Statement> body, LList<Label> labels, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
 
       wr.Write($"for {loopIndex.CompileName} := ");
       var startWr = wr.Fork();
@@ -2109,6 +2110,7 @@ namespace Microsoft.Dafny.Compilers {
         }
       }
       bodyWr = EmitContinueLabel(labels, bodyWr);
+      annotWriter = bodyWr.Fork();
       TrStmtList(body, bodyWr);
 
       return startWr;

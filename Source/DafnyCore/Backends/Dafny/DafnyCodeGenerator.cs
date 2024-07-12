@@ -1170,15 +1170,17 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected override ConcreteSyntaxTree EmitForStmt(IToken tok, IVariable loopIndex, bool goingUp, string endVarName,
-      List<Statement> body, LList<Label> labels, ConcreteSyntaxTree wr) {
+      List<Statement> body, LList<Label> labels, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
       AddUnsupportedFeature(tok, Feature.ForLoops);
+      annotWriter = null;
       return wr;
     }
 
-    protected override ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, ConcreteSyntaxTree wr) {
+    protected override ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
       if (wr is BuilderSyntaxTree<StatementContainer> statementContainer) {
         var whileBuilder = statementContainer.Builder.While();
         guardWriter = new BuilderSyntaxTree<ExprContainer>(whileBuilder, this);
+        annotWriter = guardWriter.Fork();
         return new BuilderSyntaxTree<StatementContainer>(whileBuilder, this);
       } else {
         throw new InvalidOperationException();

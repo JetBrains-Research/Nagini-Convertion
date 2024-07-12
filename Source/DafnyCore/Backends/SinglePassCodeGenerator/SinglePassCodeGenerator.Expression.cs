@@ -272,9 +272,11 @@ namespace Microsoft.Dafny.Compilers {
             EmitDatatypeValue(dtv, wTypeDescriptorArguments.ToString(), wrArgumentList.ToString(), wr);
             break;
           }
-        case OldExpr:
-          Contract.Assert(false);
-          throw new cce.UnreachableException(); // 'old' is always a ghost
+        case OldExpr oldExpr:
+          EmitOldExpr(oldExpr.E, inLetExprBody, wr, wStmts);
+          break;
+        // Contract.Assert(false);
+        // throw new cce.UnreachableException(); // 'old' is always a ghost
         case UnaryOpExpr opExpr: {
             var e = opExpr;
             if (e.ResolvedOp == UnaryOpExpr.ResolvedOpcode.BVNot) {
@@ -400,17 +402,17 @@ namespace Microsoft.Dafny.Compilers {
                 e.Bounds, e.BoundVars, i);
               wBody = EmitQuantifierExpr(collection, quantifierExpr is ForallExpr, collectionElementType, bv, wBody);
               var native = AsNativeType(e.BoundVars[i].Type);
-              var tmpVarName = ProtectedFreshId(e is ForallExpr ? "_forall_var_" : "_exists_var_");
+              // var tmpVarName = ProtectedFreshId(e is ForallExpr ? "_forall_var_" : "_exists_var_");
               ConcreteSyntaxTree newWBody = CreateLambda(new List<Type> { collectionElementType }, e.tok,
-                new List<string> { tmpVarName }, Type.Bool, wBody, wStmts, untyped: true);
+                new List<string> { IdName(bv) }, Type.Bool, wBody, wStmts, untyped: true);
               wStmts = newWBody.Fork();
-              newWBody = MaybeInjectSubtypeConstraintWrtTraits(
-                tmpVarName, collectionElementType, bv.Type,
-                inLetExprBody, e.tok, newWBody, true, e is ForallExpr);
-              EmitDowncastVariableAssignment(
-                IdName(bv), bv.Type, tmpVarName, collectionElementType, true, e.tok, newWBody);
-              newWBody = MaybeInjectSubsetConstraint(
-                bv, bv.Type, inLetExprBody, e.tok, newWBody, newtypeConversionsWereExplicit, isReturning: true, elseReturnValue: e is ForallExpr);
+              // newWBody = MaybeInjectSubtypeConstraintWrtTraits(
+              //   tmpVarName, collectionElementType, bv.Type,
+              //   inLetExprBody, e.tok, newWBody, true, e is ForallExpr);
+              // EmitDowncastVariableAssignment(
+              //   IdName(bv), bv.Type, tmpVarName, collectionElementType, true, e.tok, newWBody);
+              // newWBody = MaybeInjectSubsetConstraint(
+              //   bv, bv.Type, inLetExprBody, e.tok, newWBody, newtypeConversionsWereExplicit, isReturning: true, elseReturnValue: e is ForallExpr);
               wBody = newWBody;
             }
 

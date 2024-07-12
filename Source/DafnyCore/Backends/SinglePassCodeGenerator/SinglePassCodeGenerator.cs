@@ -83,6 +83,11 @@ namespace Microsoft.Dafny.Compilers {
       return n;
     }
 
+    protected string replacedVar = "";
+    protected bool needReplacement = false;
+
+    protected Stack<(string, Type)> list_decls = new Stack<(string, Type)>();
+
     public readonly CoverageInstrumenter Coverage;
 
     // Common limits on the size of builtins: tuple, arrow, and array types.
@@ -99,6 +104,7 @@ namespace Microsoft.Dafny.Compilers {
 
     protected SinglePassCodeGenerator(DafnyOptions options, ErrorReporter reporter) {
       this.Options = options;
+      list_decls = new Stack<(string, Type)>();
       Reporter = reporter;
       Coverage = new CoverageInstrumenter(this);
       System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(GeneratorErrors).TypeHandle);
@@ -382,6 +388,7 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected abstract bool DeclareFormal(string prefix, string name, Type type, IToken tok, bool isInParam, ConcreteSyntaxTree wr);
+
     /// <summary>
     /// If "leaveRoomForRhs" is false and "rhs" is null, then generates:
     ///     type name;
@@ -626,7 +633,7 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected virtual ConcreteSyntaxTree EmitWhile(IToken tok, List<Statement> body, LList<Label> labels, ConcreteSyntaxTree wr) {  // returns the guard writer
-      var wBody = CreateWhileLoop(out var guardWriter, wr);
+      var wBody = CreateWhileLoop(out var guardWriter, out var annotWriter, wr);
       wBody = EmitContinueLabel(labels, wBody);
       Coverage.Instrument(tok, "while body", wBody);
       TrStmtList(body, wBody);
@@ -634,12 +641,13 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected abstract ConcreteSyntaxTree EmitForStmt(IToken tok, IVariable loopIndex, bool goingUp, string /*?*/ endVarName,
-      List<Statement> body, LList<Label> labels, ConcreteSyntaxTree wr);
+      List<Statement> body, LList<Label> labels, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr);
 
-    protected virtual ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, ConcreteSyntaxTree wr) {
+    protected virtual ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
       wr.Write("while (");
       guardWriter = wr.Fork();
       var wBody = wr.NewBlock(")");
+      annotWriter = wr.Fork();
       return wBody;
     }
 
@@ -1307,6 +1315,8 @@ namespace Microsoft.Dafny.Compilers {
 
     protected abstract void EmitUnaryExpr(ResolvedUnaryOp op, Expression expr, bool inLetExprBody,
       ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts);
+
+    protected virtual void EmitOldExpr(Expression e, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) { }
 
     protected virtual void CompileBinOp(BinaryExpr.ResolvedOpcode op,
       Type e0Type, Type e1Type, IToken tok, Type resultType,
@@ -2772,6 +2782,7 @@ namespace Microsoft.Dafny.Compilers {
         var useReturnStyleOuts = UseReturnStyleOuts(m, nonGhostOutsCount);
         foreach (var p in m.Outs) {
           if (!p.IsGhost) {
+            traceVars(p);
             DeclareLocalOutVar(IdName(p), p.Type, p.tok, PlaceboValue(p.Type, w, p.tok, true), useReturnStyleOuts, w);
           }
         }
@@ -4636,6 +4647,8 @@ namespace Microsoft.Dafny.Compilers {
     protected virtual void TrStmtList(List<Statement> stmts, ConcreteSyntaxTree writer) {
       Contract.Requires(cce.NonNullElements(stmts));
       Contract.Requires(writer != null);
+      Console.WriteLine(list_decls.Count);
+      var curS = list_decls.Count;
       foreach (Statement ss in stmts) {
         // label:        // if any
         //   <prelude>   // filled via copyInstrWriters -- copies out-parameters used in letexpr to local variables
@@ -4651,6 +4664,9 @@ namespace Microsoft.Dafny.Compilers {
         TrStmt(ss, w);
         copyInstrWriters.Pop();
       }
+      while (list_decls.Count > curS) {
+        list_decls.Pop();
+      }
     }
 
     protected ConcreteSyntaxTree EmitContinueLabel(LList<Label> loopLabels, ConcreteSyntaxTree writer) {
@@ -4661,8 +4677,26 @@ namespace Microsoft.Dafny.Compilers {
       return writer;
     }
 
+    private void traceVars(IVariable v) {
+      switch (v.Type) {
+        case UserDefinedType udt:
+          if (udt.Name.StartsWith("array")) {
+            list_decls.Push((IdName(v), v.Type));
+          }
+          break;
+        case MapType _:
+        case SeqType _:
+        case SetType _:
+          list_decls.Push((IdName(v), v.Type));
+          break;
+        default:
+          break;
+      }
+    }
+
     void TrLocalVar(IVariable v, bool alwaysInitialize, ConcreteSyntaxTree wr) {
       Contract.Requires(v != null);
+      traceVars(v);
       if (v.IsGhost) {
         // only emit non-ghosts (we get here only for local variables introduced implicitly by call statements)
         return;
@@ -4708,6 +4742,9 @@ namespace Microsoft.Dafny.Compilers {
         }
       }
       return w;
+    }
+
+    protected virtual void GenerateAccessInv(string name, Type type, string prefix, List<string> suffixes, ConcreteSyntaxTree wr) {
     }
 
     // ----- Expression ---------------------------------------------------------------------------
@@ -4763,7 +4800,11 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected virtual void EmitIdentifier(string ident, ConcreteSyntaxTree wr) {
-      wr.Write(ident);
+      if (needReplacement && ident == replacedVar) {
+        wr.Write("Result()");
+      } else {
+        wr.Write(ident);
+      }
     }
 
     public virtual ConcreteSyntaxTree Expr(Expression expr, bool inLetExprBody, ConcreteSyntaxTree wStmts) {
@@ -4986,7 +5027,7 @@ namespace Microsoft.Dafny.Compilers {
           if (isReturning) {
             var elseBranch = wr;
             elseBranch = EmitBlock(elseBranch);
-            elseBranch = EmitReturnExpr(elseBranch);
+            // elseBranch = EmitReturnExpr(elseBranch);
             var wStmts = elseBranch.Fork();
             EmitExpr(Expression.CreateBoolLiteral(tok, elseReturnValue), inLetExprBody, elseBranch, wStmts);
           }
@@ -4995,7 +5036,7 @@ namespace Microsoft.Dafny.Compilers {
       }
 
       if (isReturning) {
-        wr = EmitReturnExpr(wr);
+        // wr = EmitReturnExpr(wr);
       }
       return wr;
     }

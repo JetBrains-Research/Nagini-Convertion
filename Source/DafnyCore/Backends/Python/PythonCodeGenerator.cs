@@ -45,12 +45,12 @@ namespace Microsoft.Dafny.Compilers {
     private const string DafnyDefaultModule = "module_";
     private const string DafnySystemModule = "System_";
     private static readonly ISet<string> DafnyRuntimeGeneratedModuleNames = new HashSet<string> { DafnySystemModule, };
-    const string DafnySetClass = $"{DafnyRuntimeModule}.Set";
+    const string DafnySetClass = "set";
     const string DafnyMultiSetClass = $"{DafnyRuntimeModule}.MultiSet";
-    const string DafnySeqClass = $"{DafnyRuntimeModule}.Seq";
-    private string DafnySeqMakerFunction => UnicodeCharEnabled ? $"{DafnyRuntimeModule}.SeqWithoutIsStrInference" : DafnySeqClass;
-    const string DafnyArrayClass = $"{DafnyRuntimeModule}.Array";
-    const string DafnyMapClass = $"{DafnyRuntimeModule}.Map";
+    const string DafnySeqClass = "list";
+    private string DafnySeqMakerFunction => "list";
+    const string DafnyArrayClass = "list";
+    const string DafnyMapClass = "dict";
     const string DafnyDefaults = $"{DafnyRuntimeModule}.defaults";
     string FormatDefaultTypeParameterValue(TopLevelDecl tp) {
       Contract.Requires(tp is TypeParameter or AbstractTypeDecl);
@@ -615,6 +615,89 @@ namespace Microsoft.Dafny.Compilers {
       return methodWriter.NewBlockPy(header: $"def {name}({(isStatic ? "instance" : "self")}):");
     }
 
+    protected override void GenerateAccessInv(string name, Type type, string prefix, List<string> suffixes, ConcreteSyntaxTree wr) {
+      string typeStr = "";
+      switch (type) {
+        case UserDefinedType udt:
+          if (udt.Name.StartsWith("array")) {
+            typeStr = "list";
+          } else {
+            return;
+          }
+          break;
+        case MapType _:
+          typeStr = "dict";
+          break;
+        case SeqType _:
+          typeStr = "list";
+          break;
+        case SetType _:
+          typeStr = "set";
+          break;
+        default:
+          return;
+          break;
+      }
+      wr.Write(prefix + "(");
+      for (var t = 0; t < suffixes.Count; t++) {
+        wr.Write("Forall(");
+        if (t == 0) {
+          wr.Write(name + suffixes[t]);
+        } else {
+          wr.Write(name + $"{t - 1}" + suffixes[t]);
+        }
+        wr.Write($", lambda {name}{t}: ");
+      }
+      wr.Write("Acc(" + typeStr + "_pred" + "(");
+      if (suffixes.Count == 0) {
+        wr.Write(name);
+      } else {
+        wr.Write(name + $"{suffixes.Count - 1}");
+      }
+      wr.WriteLine(string.Concat(Enumerable.Repeat(")", suffixes.Count + 3)));
+      switch (type) {
+        case UserDefinedType udt: {
+            if (udt.Name.StartsWith("array")) {
+              suffixes.Add("");
+              var numStr = udt.Name.Substring(5, udt.Name.Length - 5);
+              var num = 1;
+              if (numStr != "") {
+                num = Int32.Parse(numStr);
+              }
+              if (num == 1) {
+                GenerateAccessInv(name, udt.TypeArgs[0], prefix, suffixes, wr);
+              } else {
+                udt.Name = $"array{num - 1}";
+                GenerateAccessInv(name, udt, prefix, suffixes, wr);
+              }
+            }
+            break;
+          }
+        case MapType _: {
+            suffixes.Add(".keys()");
+            GenerateAccessInv(name, ((MapType)type).Domain, prefix, suffixes, wr);
+            suffixes.RemoveAt(0);
+            suffixes.Add(".values()");
+            GenerateAccessInv(name, ((MapType)type).Range, prefix, suffixes, wr);
+            break;
+          }
+        case SeqType sqt:
+        case SetType set: {
+            suffixes.Add("");
+            GenerateAccessInv(name, ((CollectionType)type).Arg, prefix, suffixes, wr);
+            break;
+          }
+        default:
+          break;
+      }
+    }
+
+    protected override void EmitOldExpr(Expression e, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmt) {
+      wr.Write("Old(");
+      EmitExpr(e, inLetExprBody, wr, wStmt);
+      wr.Write(")");
+    }
+
     private ConcreteSyntaxTree CreateMethod(Method m, List<TypeArgumentInstantiation> typeArgs, bool createBody,
         ConcreteSyntaxTree wr, bool forBodyInheritance, bool lookasideBody) {
       var customReceiver = !forBodyInheritance && NeedsCustomReceiver(m);
@@ -623,7 +706,74 @@ namespace Microsoft.Dafny.Compilers {
       wr.Write($"def {protectedName}(");
       var sep = "";
       WriteFormals(ForTypeDescriptors(typeArgs, m.EnclosingClass, m, lookasideBody), m.Ins, m.IsStatic, customReceiver, ref sep, wr);
-      var body = wr.NewBlockPy("):", close: BlockStyle.Newline);
+      Console.WriteLine($"AAAAA METHOD {protectedName}");
+      list_decls.Clear();
+      foreach (var f in m.Ins) {
+        // Console.WriteLine(FormalName(f, 0));
+        // Console.WriteLine(f.Type);
+        switch (f.Type) {
+          case UserDefinedType udt:
+            if (udt.Name.StartsWith("array")) {
+              list_decls.Push((FormalName(f, 0), f.Type));
+            }
+            break;
+          case MapType _:
+          case SeqType _:
+          case SetType _:
+            list_decls.Push((FormalName(f, 0), f.Type));
+            break;
+          default:
+            break;
+        }
+      }
+      var nameRes = "";
+      var ExistsOut = false;
+      wr.Write(")");
+
+      if (m.Outs.Count > 0) {
+        var res = m.Outs[0];
+        wr.Write(" -> ");
+        ExistsOut = true;
+        nameRes = FormalName(res, 0);
+        wr.Write($"{ConvertTypeToPython(res.Type)}");
+      } else {
+        wr.Write(" -> None");
+      }
+      // WriteFormals("", m.Outs, wr);
+      wr.Write(":");
+
+      var body = wr.NewBlockPy("", open: BlockStyle.Newline, close: BlockStyle.Newline);
+
+      foreach (var (name, type) in list_decls) {
+        GenerateAccessInv(name, type, "Requires", new List<string>(), body);
+      }
+
+      foreach (AttributedExpression req in m.Req) {
+        body.Write("Requires(");
+        var t = body.Fork();
+        EmitExpr(req.E, false, body, t);
+        body.WriteLine(")");
+      }
+
+      foreach (var (name, type) in list_decls) {
+        GenerateAccessInv(name, type, "Ensures", new List<string>(), body);
+      }
+
+      if (m.Outs.Count > 0) {
+        GenerateAccessInv("Result()", m.Outs[0].Type, "Ensures", new List<string>(), body);
+      }
+
+      foreach (AttributedExpression ens in m.Ens) {
+        body.Write("Ensures(");
+        var t = body.Fork();
+        if (ExistsOut) {
+          replacedVar = nameRes;
+          needReplacement = true;
+        }
+        EmitExpr(ens.E, false, body, t);
+        needReplacement = false;
+        body.WriteLine(")");
+      }
       if (createBody) {
         if (m.Body.Body.All(s => s.IsGhost)) {
           body.WriteLine("pass");
@@ -666,8 +816,9 @@ namespace Microsoft.Dafny.Compilers {
       var protectedName = !forBodyInheritance ? CompanionMemberIdName(member) : IdName(member);
       wr.Write($"def {protectedName}(");
       var sep = "";
+      Console.WriteLine("AAAAA FunCTION");
       WriteFormals(ForTypeDescriptors(typeArgs, member.EnclosingClass, member, lookasideBody), formals, isStatic, customReceiver, ref sep, wr);
-      return wr.NewBlockPy("):", close: BlockStyle.Newline);
+      return wr.NewBlockPy($") -> {ConvertTypeToPython(resultType)} :", close: BlockStyle.Newline);
     }
 
     // Unlike the other compilers, we use lambdas to model type descriptors here.
@@ -792,6 +943,14 @@ namespace Microsoft.Dafny.Compilers {
       return string.Join('.', segments);
     }
 
+    private string repeatDimensions(string rangeDefaultValue, int Dims, List<string> dimensions) {
+      if (Dims == 0) {
+        return $"{rangeDefaultValue}";
+      } else {
+        return $"[{repeatDimensions(rangeDefaultValue, Dims - 1, dimensions)}] * {dimensions[dimensions.Count() - Dims]}";
+      }
+    }
+
     protected override string TypeInitializationValue(Type type, ConcreteSyntaxTree wr, IToken tok,
         bool usePlaceboValue, bool constructTypeParameterDefaultsFromTypeDescriptors) {
 
@@ -819,8 +978,10 @@ namespace Microsoft.Dafny.Compilers {
             var wrString = new ConcreteSyntaxTree();
             StringLiteralWrapper(wrString).Write("\"\"");
             return wrString.ToString();
+          } else if (xType is SeqType) {
+            return $"{TypeHelperName(xType)}([{TypeInitializationValue(type.TypeArgs[0], wr, tok, usePlaceboValue, constructTypeParameterDefaultsFromTypeDescriptors)}] * 0)"; // TypeInitializationValue
           } else {
-            return $"{TypeHelperName(xType)}({{}})";
+            return $"{TypeHelperName(xType)}([{TypeInitializationValue(type.TypeArgs[0], wr, tok, usePlaceboValue, constructTypeParameterDefaultsFromTypeDescriptors)}] * 0)";
           }
         case UserDefinedType udt: {
             var cl = udt.ResolvedClass;
@@ -834,15 +995,16 @@ namespace Microsoft.Dafny.Compilers {
                     if (ArrowType.IsPartialArrowTypeName(td.Name)) {
                       return "None";
                     }
+                    var rangeDefaultValue = TypeInitializationValue(udt.TypeArgs.Last(), wr, tok, usePlaceboValue,
+                      constructTypeParameterDefaultsFromTypeDescriptors);
                     if (td is NonNullTypeDecl decl) {
                       if (decl.Class is ArrayClassDecl arr) {
-                        return $"{DafnyArrayClass}(None, {Enumerable.Repeat("0", arr.Dims).Comma()})";
+                        return repeatDimensions(rangeDefaultValue, arr.Dims, new List<string>(Enumerable.Repeat("0", arr.Dims)));
+                        // return $"{DafnyArrayClass}([{rangeDefaultValue}] * {Enumerable.Repeat("0", arr.Dims).Comma()})";
                       }
                       return "None";
                     }
                     Contract.Assert(udt.TypeArgs.Any() && ArrowType.IsTotalArrowTypeName(td.Name));
-                    var rangeDefaultValue = TypeInitializationValue(udt.TypeArgs.Last(), wr, tok, usePlaceboValue,
-                      constructTypeParameterDefaultsFromTypeDescriptors);
                     // The final TypeArg contains the result type
                     var arguments = udt.TypeArgs.SkipLast(1).Comma((_, i) => idGenerator.FreshId("x"));
                     return $"(lambda {arguments}: {rangeDefaultValue})";
@@ -921,18 +1083,72 @@ namespace Microsoft.Dafny.Compilers {
 
     protected override bool DeclareFormal(string prefix, string name, Type type, IToken tok, bool isInParam, ConcreteSyntaxTree wr) {
       if (isInParam) {
-        wr.Write($"{prefix}{name}");
+        wr.Write($"{prefix}{name} : {ConvertTypeToPython(type)}");
         return true;
       } else {
         return false;
       }
     }
 
+    protected string ConvertTypesToPython(List<Type> typeArgs) {
+      if (typeArgs != null && typeArgs.Count > 0) {
+        return string.Format("[{0}]", Util.Comma(typeArgs, ty => ConvertTypeToPython(ty)));
+      }
+      return "";
+    }
+
+    protected string ConvertTypeToPython(Type type) {
+      switch (type) {
+        case SeqType seqType:
+          return "List" + ConvertTypesToPython(seqType.TypeArgs);
+          break;
+        case SetType setType:
+          return "Set" + ConvertTypesToPython(setType.TypeArgs);
+          break;
+        case RealType realType:
+          return "float";
+          break;
+        case BasicType basicType:
+          return basicType.ToString();
+          break;
+        case MapType mapType:
+          return "Dict" + ConvertTypesToPython(mapType.TypeArgs);
+          break;
+        case UserDefinedType userDefinedType:
+          if (SystemModuleManager.IsTupleTypeName(userDefinedType.Name)) {
+            return "(" + Util.Comma(userDefinedType.TypeArgs, ty => ConvertTypeToPython(ty)) + ")";
+          } else if (userDefinedType.Name.StartsWith("array")) {
+            var numStr = userDefinedType.Name.Substring(5, userDefinedType.Name.Length - 5);
+            var num = 1;
+            if (numStr != "") {
+              num = Int32.Parse(numStr);
+            }
+            return (string.Concat(Enumerable.Repeat("List[", num))) + ConvertTypeToPython(userDefinedType.TypeArgs[0]) + (string.Concat(Enumerable.Repeat("]", num)));
+          } else if (userDefinedType.Name.StartsWith("nat")) {
+            return "int";
+          } else {
+            return userDefinedType.Name + ConvertTypesToPython(userDefinedType.TypeArgs);
+          }
+          break;
+        case IntVarietiesSupertype intVarietiesSupertype:
+          return "int";
+          break;
+        case RealVarietiesSupertype realVarietiesSupertype:
+          return "float";
+          break;
+        case TypeProxy proxy:
+          return ConvertTypeToPython(proxy.T);
+          break;
+        default:
+          throw new NotSupportedException("Not supported type " + type.ToString());
+      }
+    }
+
     protected override void DeclareLocalVar(string name, Type type, IToken tok, bool leaveRoomForRhs, string rhs,
         ConcreteSyntaxTree wr) {
       wr.Write(name);
-      if (type != null) { wr.Write($": {TypeName(type, wr, tok)}"); }
       if (rhs != null) { wr.Write($" = {rhs}"); }
+      if (type != null) { wr.Write($" # type : {ConvertTypeToPython(type)}"); }
       if (!leaveRoomForRhs) {
         wr.WriteLine();
       }
@@ -940,7 +1156,7 @@ namespace Microsoft.Dafny.Compilers {
 
     protected override ConcreteSyntaxTree DeclareLocalVar(string name, Type type, IToken tok, ConcreteSyntaxTree wr) {
       var w = new ConcreteSyntaxTree();
-      wr.FormatLine($"{name} = {w}");
+      wr.FormatLine($"{name} = {w} # type : {ConvertTypeToPython(type)}");
       return w;
     }
 
@@ -1031,7 +1247,7 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected override ConcreteSyntaxTree EmitForStmt(IToken tok, IVariable loopIndex, bool goingUp, string endVarName,
-      List<Statement> body, LList<Label> labels, ConcreteSyntaxTree wr) {
+      List<Statement> body, LList<Label> labels, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
       string iterator;
       var lowWr = new ConcreteSyntaxTree();
       string argumentRemainder;
@@ -1044,16 +1260,18 @@ namespace Microsoft.Dafny.Compilers {
       }
       wr.Format($"for {IdName(loopIndex)} in {iterator}({lowWr}{argumentRemainder})");
       var bodyWr = wr.NewBlockPy($":");
+      annotWriter = bodyWr.Fork();
       bodyWr = EmitContinueLabel(labels, bodyWr);
       TrStmtList(body, bodyWr);
 
       return lowWr;
     }
 
-    protected override ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, ConcreteSyntaxTree wr) {
+    protected override ConcreteSyntaxTree CreateWhileLoop(out ConcreteSyntaxTree guardWriter, out ConcreteSyntaxTree annotWriter, ConcreteSyntaxTree wr) {
       wr.Write("while ");
       guardWriter = wr.Fork();
       var wBody = wr.NewBlockPy(":");
+      annotWriter = wBody.Fork();
       return wBody;
     }
 
@@ -1084,8 +1302,10 @@ namespace Microsoft.Dafny.Compilers {
     protected override ConcreteSyntaxTree CreateForeachLoop(string tmpVarName, Type collectionElementType, IToken tok,
       out ConcreteSyntaxTree collectionWriter, ConcreteSyntaxTree wr) {
       collectionWriter = new ConcreteSyntaxTree();
-      wr.WriteLine($"{tmpVarName}: {TypeName(collectionElementType, wr, tok)}")
-        .Format($"for {tmpVarName} in {collectionWriter}:");
+      DeclareLocalVar(tmpVarName, collectionElementType, tok, false, PlaceboValue(collectionElementType, wr, tok, true), wr);
+      wr.Format($"for {tmpVarName} in {collectionWriter}:");
+      // wr.WriteLine($"{tmpVarName} # type : {collectionElementType}")
+      //   .Format($"for {tmpVarName} in {collectionWriter}:");
       return wr.NewBlockPy();
     }
 
@@ -1112,8 +1332,9 @@ namespace Microsoft.Dafny.Compilers {
 
     protected override void EmitNewArray(Type elementType, IToken tok, List<string> dimensions,
       bool mustInitialize, [CanBeNull] string exampleElement, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
-      var initValue = mustInitialize ? DefaultValue(elementType, wr, tok, true) : "None";
-      wr.Write($"{DafnyArrayClass}({initValue}, {dimensions.Comma(s => s)})");
+      var initValue = true ? DefaultValue(elementType, wr, tok, true) : "None";
+      wr.Write(repeatDimensions(initValue, dimensions.Count(), dimensions));
+      // wr.Write($"{DafnyArrayClass}([{initValue}] * {dimensions.Comma(s => s)})");
     }
 
     protected static string TranslateEscapes(string s) {
@@ -1128,11 +1349,11 @@ namespace Microsoft.Dafny.Compilers {
       switch (e) {
         case CharLiteralExpr:
           var escaped = TranslateEscapes((string)e.Value);
-          if (UnicodeCharEnabled) {
-            wr.Write($"{DafnyRuntimeModule}.CodePoint('{escaped}')");
-          } else {
-            wr.Write($"'{escaped}'");
-          }
+          // if (UnicodeCharEnabled) {
+          //   wr.Write($"{DafnyRuntimeModule}.CodePoint('{escaped}')");
+          // } else {
+          wr.Write($"'{escaped}'");
+          // }
           break;
         case StringLiteralExpr str:
           TrStringLiteral(str, StringLiteralWrapper(wr));
@@ -1358,7 +1579,10 @@ namespace Microsoft.Dafny.Compilers {
         case SpecialField.ID.ArrayLength:
         case SpecialField.ID.ArrayLengthInt:
           var dim = idParam is int d and > 0 ? d : 0;
-          compiledName = $"length({dim})";
+          preString = "len(";
+
+          postString = (string.Concat(Enumerable.Repeat("[0]", dim))) + ")";
+          // compiledName = $"length({dim})";
           break;
         default:
           Contract.Assert(false); // unexpected ID
@@ -1553,11 +1777,24 @@ namespace Microsoft.Dafny.Compilers {
       }
     }
 
+    protected override ConcreteSyntaxTree EmitQuantifierExpr(Action<ConcreteSyntaxTree> collection, bool isForall, Type collectionElementType, BoundVar bv, ConcreteSyntaxTree wr) {
+      if (!isForall) {
+        wr.Write("Exists(");
+      } else {
+        wr.Write("Forall(");
+      }
+      collection(wr);
+      wr.Write(", ");
+      var ret = wr.Fork();
+      wr.Write(")");
+      return ret;
+    }
+
     protected override ConcreteSyntaxTree CreateLambda(List<Type> inTypes, IToken tok, List<string> inNames,
         Type resultType, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts, bool untyped = false) {
-      var functionName = ProtectedFreshId("_lambda");
-      wr.Write(functionName);
-      return wStmts.NewBlockPy($"def {functionName}({inNames.Comma()}):", close: BlockStyle.Newline);
+      // var functionName = ProtectedFreshId("_lambda");
+      // wr.Write(functionName);
+      return wr.NewBlockPy($"lambda {inNames.Comma()}:", close: BlockStyle.Nothing);
     }
 
     protected override void CreateIIFE(string bvName, Type bvType, IToken bvTok, Type bodyType, IToken bodyTok,
@@ -1887,17 +2124,16 @@ namespace Microsoft.Dafny.Compilers {
 
     private static string TypeHelperName(Type ct) {
       return ct switch {
-        SetType => DafnySetClass,
-        SeqType => DafnySeqClass,
-        MapType => DafnyMapClass,
-        MultiSetType => DafnyMultiSetClass,
+        SetType => "set",
+        SeqType => "list",
+        MapType => "dict",
         _ => throw new NotImplementedException()
       };
     }
 
     protected override void EmitMapDisplay(MapType mt, IToken tok, List<ExpressionPair> elements, bool inLetExprBody,
       ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
-      wr.Write($"{DafnyMapClass}({{");
+      wr.Write($"dict({{");
       var sep = "";
       foreach (var p in elements) {
         wr.Write(sep);
@@ -1910,17 +2146,17 @@ namespace Microsoft.Dafny.Compilers {
     }
 
     protected override void EmitSetBuilder_New(ConcreteSyntaxTree wr, SetComprehension e, string collectionName) {
-      wr.WriteLine($"{collectionName} = {DafnySetClass}()");
+      wr.WriteLine($"{collectionName} = set() # type : {ConvertTypeToPython(e.Type)}");
     }
 
     protected override void EmitMapBuilder_New(ConcreteSyntaxTree wr, MapComprehension e, string collectionName) {
-      wr.WriteLine($"{collectionName} = {DafnyMapClass}()");
+      wr.WriteLine($"{collectionName} = dict() # type : {ConvertTypeToPython(e.Type)}");
     }
 
     protected override void EmitSetBuilder_Add(CollectionType ct, string collName, Expression elmt, bool inLetExprBody,
         ConcreteSyntaxTree wr) {
       var wStmts = wr.Fork();
-      wr.WriteLine($"{collName} = {collName}.union({DafnySetClass}([{Expr(elmt, inLetExprBody, wStmts)}]))");
+      wr.WriteLine($"{collName} = {collName}.union(set([{Expr(elmt, inLetExprBody, wStmts)}]))");
     }
 
     protected override ConcreteSyntaxTree EmitMapBuilder_Add(MapType mt, IToken tok, string collName, Expression term,
@@ -1952,13 +2188,56 @@ namespace Microsoft.Dafny.Compilers {
 
     protected override (Type, Action<ConcreteSyntaxTree>) EmitIntegerRange(Type type, Action<ConcreteSyntaxTree> wLo, Action<ConcreteSyntaxTree> wHi) {
       return (new IntType(), (wr) => {
-        wr.Write($"{DafnyRuntimeModule}.IntegerRange(");
+        wr.Write($"range(");
         wLo(wr);
         wr.Write(", ");
         wHi(wr);
         wr.Write(')');
       }
       );
+    }
+
+    protected override void EmitBoolBoundedPool(bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      wr.Write("([True, False])");
+    }
+
+    protected override void EmitCharBoundedPool(bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      throw new NotImplementedException();
+    }
+
+    protected override void EmitWiggleWaggleBoundedPool(bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      throw new NotImplementedException();
+    }
+
+    protected override void EmitSetBoundedPool(Expression of, string propertySuffix, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      TrParenExpr(of, wr, inLetExprBody, wStmts);
+      // wr.Write(".Elements" + propertySuffix);
+    }
+
+    protected override void EmitMultiSetBoundedPool(Expression of, bool includeDuplicates, string propertySuffix, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      wr.Write(includeDuplicates ? "list(" : "set(");
+      TrParenExpr(of, wr, inLetExprBody, wStmts);
+      wr.Write(")");
+    }
+
+    protected override void EmitSubSetBoundedPool(Expression of, string propertySuffix, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      throw new NotImplementedException();
+    }
+
+    protected override void EmitMapBoundedPool(Expression map, string propertySuffix, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      TrParenExpr(map, wr, inLetExprBody, wStmts);
+      GetSpecialFieldInfo(SpecialField.ID.Keys, null, null, out var keyName, out _, out _);
+      wr.Write($".{keyName}()");
+    }
+
+    protected override void EmitSeqBoundedPool(Expression of, bool includeDuplicates, string propertySuffix, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      wr.Write(includeDuplicates ? "list(" : "set(");
+      TrParenExpr(of, wr, inLetExprBody, wStmts);
+      wr.Write(")");
+    }
+
+    protected override void EmitDatatypeBoundedPool(IVariable bv, string propertySuffix, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
+      throw new NotImplementedException();
     }
 
     protected override void EmitSingleValueGenerator(Expression e, bool inLetExprBody, string type,
