@@ -18,7 +18,7 @@ public abstract class MethodOrFunction : MemberDecl {
   public readonly List<AttributedExpression> Req;
   public readonly List<AttributedExpression> Ens;
   public readonly Specification<Expression> Decreases;
-  public readonly List<Formal> Ins;
+  public List<Formal> Ins;
 
   protected MethodOrFunction(RangeToken rangeToken, Name name, bool hasStaticKeyword, bool isGhost,
     Attributes attributes, bool isRefining, List<TypeParameter> typeArgs, List<Formal> ins,

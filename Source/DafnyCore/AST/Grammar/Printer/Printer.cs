@@ -23,7 +23,9 @@ namespace Microsoft.Dafny {
     Everything,
     Serialization, // Serializing the program to a file for lossless loading later
     NoIncludes,
-    NoGhost
+    NoGhost, 
+    Validation, 
+    Markup
   }
 
 
@@ -57,6 +59,8 @@ NoGhost - disable printing of functions, ghost methods, and proof
     bool printingExportSet = false;
     bool printingDesugared = false;
     private readonly PrintFlags printFlags;
+
+    private List<string> lemmas = new List<string>();
 
     [ContractInvariantMethod]
     void ObjectInvariant() {
@@ -109,7 +113,7 @@ NoGhost - disable printing of functions, ghost methods, and proof
       Contract.Requires(stmt != null);
       using var wr = new StringWriter();
       var pr = new Printer(wr, options);
-      pr.PrintStatement(stmt, 0);
+      pr.PrintStatement(stmt, 0,  false);
       return ToStringWithoutNewline(wr);
     }
 
@@ -197,27 +201,32 @@ NoGhost - disable printing of functions, ghost methods, and proof
     public void PrintProgram(Program prog, bool afterResolver) {
       Contract.Requires(prog != null);
       this.afterResolver = afterResolver;
-      if (options.ShowEnv != Bpl.ExecutionEngineOptions.ShowEnvironment.Never) {
-        wr.WriteLine("// " + options.Version);
-        wr.WriteLine("// " + options.Environment);
-      }
-      if (options.PrintMode != PrintModes.Serialization) {
-        wr.WriteLine("// {0}", prog.Name);
-      }
-      if (options.DafnyPrintResolvedFile != null && options.PrintMode == PrintModes.Everything) {
-        wr.WriteLine();
-        wr.WriteLine("/*");
-        PrintModuleDefinition(prog.Compilation, prog.SystemModuleManager.SystemModule, null, 0, null, Path.GetFullPath(options.DafnyPrintResolvedFile));
-        wr.Write("// bitvector types in use:");
-        foreach (var w in prog.SystemModuleManager.Bitwidths) {
-          wr.Write(" bv{0}", w);
+      if (this.printMode != PrintModes.Validation && 
+          this.printMode != PrintModes.Markup) {
+        if (options.ShowEnv != Bpl.ExecutionEngineOptions.ShowEnvironment.Never) {
+          wr.WriteLine("// " + options.Version);
+          wr.WriteLine("// " + options.Environment);
         }
-        wr.WriteLine();
-        wr.WriteLine("*/");
+        if (options.PrintMode != PrintModes.Serialization) {
+          wr.WriteLine("// {0}", prog.Name);
+        }
+        if (options.DafnyPrintResolvedFile != null && options.PrintMode == PrintModes.Everything) {
+          wr.WriteLine();
+          wr.WriteLine("/*");
+          PrintModuleDefinition(prog.Compilation, prog.SystemModuleManager.SystemModule, null, 0, null, Path.GetFullPath(options.DafnyPrintResolvedFile));
+          wr.Write("// bitvector types in use:");
+          foreach (var w in prog.SystemModuleManager.Bitwidths) {
+            wr.Write(" bv{0}", w);
+          }
+          wr.WriteLine();
+          wr.WriteLine("*/");
+        }
       }
-      wr.WriteLine();
-      PrintCallGraph(prog.DefaultModuleDef, 0);
-      PrintTopLevelDecls(prog.Compilation, prog.DefaultModuleDef.TopLevelDecls, 0, null, Path.GetFullPath(prog.FullName));
+      if (this.printMode != PrintModes.Validation) {
+        wr.WriteLine();
+        PrintCallGraph(prog.DefaultModuleDef, 0);
+        PrintTopLevelDecls(prog.Compilation, prog.DefaultModuleDef.TopLevelDecls, 0, null, Path.GetFullPath(prog.FullName));
+      }
       foreach (var tup in prog.DefaultModuleDef.PrefixNamedModules) {
         var decls = new List<TopLevelDecl>() { tup.Module };
         PrintTopLevelDecls(prog.Compilation, decls, 0, tup.Parts, Path.GetFullPath(prog.FullName));
@@ -343,7 +352,7 @@ NoGhost - disable printing of functions, ghost methods, and proof
 
           if (iter.Body != null) {
             Indent(indent);
-            PrintStatement(iter.Body, indent);
+            PrintStatement(iter.Body, indent, false);
             wr.WriteLine();
           }
 
@@ -703,6 +712,19 @@ NoGhost - disable printing of functions, ghost methods, and proof
       Contract.Requires(members != null);
 
       int state = 0;  // 0 - no members yet; 1 - previous member was a field; 2 - previous member was non-field
+
+      foreach (MemberDecl m in members) {
+        if (m is Method) {
+          if ((Method)m is LeastLemma ||
+          (Method)m is GreatestLemma ||
+          (Method)m is Lemma ||
+          (Method)m is PrefixLemma ||
+          (Method)m is TwoStateLemma) {
+            this.lemmas.Add(m.Name);
+          }
+        }
+      }
+
       foreach (MemberDecl m in members) {
         if (PrintModeSkipGeneral(m.tok, fileBeingPrinted)) { continue; }
         if (printMode == PrintModes.Serialization && Attributes.Contains(m.Attributes, "auto_generated")) {
@@ -955,9 +977,13 @@ NoGhost - disable printing of functions, ghost methods, and proof
             PrintAttributedExpression(f.ByMethodDecl.Ens[0]);
             wr.Write(" */ ");
           }
-          PrintStatement(f.ByMethodBody, indent);
+          PrintStatement(f.ByMethodBody, indent, false);
         }
         wr.WriteLine();
+      }
+      if (printMode == PrintModes.Markup) {
+        Indent(indent);
+        wr.WriteLine("// pure-end");
       }
     }
 
@@ -1021,6 +1047,11 @@ NoGhost - disable printing of functions, ghost methods, and proof
       }
 
       int ind = indent + IndentAmount;
+      if (printMode == PrintModes.Markup) {
+        wr.WriteLine();
+        Indent(ind);
+        wr.Write("// pre-conditions-start");
+      }
       PrintSpec("requires", method.Req, ind);
       var readsExpressions = method.Reads.Expressions;
       if (readsExpressions != null) {
@@ -1029,16 +1060,45 @@ NoGhost - disable printing of functions, ghost methods, and proof
           PrintFrameSpecLine("reads", method.Reads, ind);
         }
       }
+      if (printMode == PrintModes.Markup) {
+        wr.WriteLine();
+        Indent(ind);
+        wr.WriteLine("// pre-conditions-end");
+        Indent(ind);
+        wr.Write("// post-conditions-start");
+      }
       if (method.Mod.Expressions != null) {
         PrintFrameSpecLine("modifies", method.Mod, ind);
       }
       PrintSpec("ensures", method.Ens, ind);
       PrintDecreasesSpec(method.Decreases, ind);
       wr.WriteLine();
+      if (printMode == PrintModes.Markup) {
+        Indent(ind);
+        wr.WriteLine("// post-conditions-end");
+      }
 
       if (method.Body != null && !printSignatureOnly) {
         Indent(indent);
-        PrintStatement(method.Body, indent);
+
+        if (printMode == PrintModes.Markup) {
+          BlockStmt stmt = method.Body;
+          wr.WriteLine("{");
+          Indent(indent);
+          wr.WriteLine("// impl-start");
+          foreach (Statement s in stmt.Body) {
+            Indent(indent + IndentAmount);
+            PrintStatement(s, indent + IndentAmount, k == "method");
+            wr.WriteLine();
+          }
+          Indent(indent);
+          wr.WriteLine("// impl-end");
+          Indent(indent);
+          wr.Write("}");
+        }
+        else {
+          PrintStatement(method.Body, indent, false);
+        }
         wr.WriteLine();
       }
     }

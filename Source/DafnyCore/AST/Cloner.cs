@@ -19,7 +19,7 @@ namespace Microsoft.Dafny {
     private readonly Dictionary<IVariable, IVariable> clones = new();
     private readonly Dictionary<MemberDecl, MemberDecl> memberClones = new();
     private readonly Dictionary<TopLevelDecl, TopLevelDecl> typeParameterClones = new();
-    public bool CloneLiteralModuleDefinition { get; }
+    public bool CloneLiteralModuleDefinition { get; set; }
 
     public void AddStatementClone(Statement original, Statement clone) {
       statementClones.Add(original, clone);
@@ -60,6 +60,10 @@ namespace Microsoft.Dafny {
       };
     }
 
+    public virtual List<MemberDecl> filterMembers(List<MemberDecl> mems) {
+      return mems.ConvertAll(member => CloneMember(member, false)).Where(member => member != null).ToList();
+    }
+
     public virtual TopLevelDecl CloneDeclaration(TopLevelDecl d, ModuleDefinition newParent) {
       Contract.Requires(d != null);
       Contract.Requires(newParent != null);
@@ -69,7 +73,7 @@ namespace Microsoft.Dafny {
         return new AbstractTypeDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent,
           CloneTPChar(dd.Characteristics), dd.TypeArgs.ConvertAll(CloneTypeParam),
           dd.ParentTraits.ConvertAll(CloneType),
-          dd.Members.ConvertAll(d => CloneMember(d, false)), CloneAttributes(dd.Attributes), dd.IsRefining);
+          filterMembers(dd.Members), CloneAttributes(dd.Attributes), dd.IsRefining);
       } else if (d is SubsetTypeDecl) {
         Contract.Assume(
           !(d is NonNullTypeDecl)); // don't clone the non-null type declaration; close the class, which will create a new non-null type declaration
@@ -88,12 +92,12 @@ namespace Microsoft.Dafny {
         if (dd.Var == null) {
           return new NewtypeDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent, CloneType(dd.BaseType),
             dd.ParentTraits.ConvertAll(CloneType),
-            dd.Members.ConvertAll(d => CloneMember(d, false)), CloneAttributes(dd.Attributes), dd.IsRefining);
+            filterMembers(dd.Members), CloneAttributes(dd.Attributes), dd.IsRefining);
         } else {
           return new NewtypeDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent, CloneBoundVar(dd.Var, false),
             CloneExpr(dd.Constraint), dd.WitnessKind, CloneExpr(dd.Witness),
             dd.ParentTraits.ConvertAll(CloneType),
-            dd.Members.ConvertAll(d => CloneMember(d, false)), CloneAttributes(dd.Attributes), dd.IsRefining);
+            filterMembers(dd.Members), CloneAttributes(dd.Attributes), dd.IsRefining);
         }
       } else if (d is TupleTypeDecl) {
         // Tuple type declarations only exist in the system module. Therefore, they are never cloned.
@@ -105,7 +109,7 @@ namespace Microsoft.Dafny {
         var ctors = dd.Ctors.ConvertAll(CloneCtor);
         var dt = new IndDatatypeDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent, tps, ctors,
           dd.ParentTraits.ConvertAll(CloneType),
-          dd.Members.ConvertAll(d => CloneMember(d, false)), CloneAttributes(dd.Attributes), dd.IsRefining);
+          filterMembers(dd.Members), CloneAttributes(dd.Attributes), dd.IsRefining);
         return dt;
       } else if (d is CoDatatypeDecl) {
         var dd = (CoDatatypeDecl)d;
@@ -113,7 +117,7 @@ namespace Microsoft.Dafny {
         var ctors = dd.Ctors.ConvertAll(CloneCtor);
         var dt = new CoDatatypeDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent, tps, ctors,
           dd.ParentTraits.ConvertAll(CloneType),
-          dd.Members.ConvertAll(d => CloneMember(d, false)), CloneAttributes(dd.Attributes), dd.IsRefining);
+          filterMembers(dd.Members), CloneAttributes(dd.Attributes), dd.IsRefining);
         return dt;
       } else if (d is IteratorDecl) {
         var dd = (IteratorDecl)d;
@@ -136,19 +140,19 @@ namespace Microsoft.Dafny {
       } else if (d is TraitDecl) {
         var dd = (TraitDecl)d;
         var tps = dd.TypeArgs.ConvertAll(CloneTypeParam);
-        var mm = dd.Members.ConvertAll(member => CloneMember(member, false));
+        var mm = filterMembers(dd.Members);
         var cl = new TraitDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent, tps, mm,
           CloneAttributes(dd.Attributes), dd.IsRefining, dd.ParentTraits.ConvertAll(CloneType));
         return cl;
       } else if (d is DefaultClassDecl) {
         var dd = (DefaultClassDecl)d;
         var tps = dd.TypeArgs.ConvertAll(CloneTypeParam);
-        var mm = dd.Members.ConvertAll(member => CloneMember(member, false));
+        var mm = filterMembers(dd.Members);
         return new DefaultClassDecl(newParent, mm);
       } else if (d is ClassDecl) {
         var dd = (ClassDecl)d;
         var tps = dd.TypeArgs.ConvertAll(CloneTypeParam);
-        var mm = dd.Members.ConvertAll(member => CloneMember(member, false));
+        var mm = filterMembers(dd.Members);
         return new ClassDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent, tps, mm,
           CloneAttributes(dd.Attributes), dd.IsRefining, dd.ParentTraits.ConvertAll(CloneType));
       } else if (d is ModuleDecl) {
@@ -327,7 +331,7 @@ namespace Microsoft.Dafny {
       return new FrameExpression(this, frame);
     }
 
-    public Attributes CloneAttributes(Attributes attrs) {
+    public virtual Attributes CloneAttributes(Attributes attrs) {
       if (attrs == null) {
         return null;
       } else if (!CloneResolvedFields && attrs.Name.StartsWith("_")) {
@@ -621,7 +625,7 @@ namespace Microsoft.Dafny {
   /// <summary>
   /// This cloner copies the origin module signatures to their cloned declarations
   /// </summary>
-  class DeepModuleSignatureCloner : Cloner {
+  public class DeepModuleSignatureCloner : Cloner {
     public DeepModuleSignatureCloner(bool cloneResolvedFields = false) : base(false, cloneResolvedFields) {
     }
 
@@ -655,12 +659,300 @@ namespace Microsoft.Dafny {
   /// This cloner is used during the creation of a module signature for a method facade.
   /// It does not clone method bodies, and it copies module signatures.
   /// </summary>
-  class ClonerButDropMethodBodies : DeepModuleSignatureCloner {
+  public class ClonerButDropMethodBodies : DeepModuleSignatureCloner {
     public ClonerButDropMethodBodies(bool cloneResolvedFields = false) : base(cloneResolvedFields) {
     }
 
     public override BlockStmt CloneBlockStmt(BlockStmt stmt) {
       return null;
     }
+  }
+
+  public class ClonerValidator : DeepModuleSignatureCloner {
+
+    DafnyOptions options;
+    List<Name> path;
+    bool in_class;
+    bool autocontracts;
+    string class_name;
+    List<Type> typeArgs;
+
+    public ClonerValidator(DafnyOptions options, bool cloneResolvedFields = false) : base(cloneResolvedFields) {
+      this.options = options;
+      this.path = new List<Name>();
+      this.path.Add(new Name("Gen"));
+      this.in_class = false;
+      this.autocontracts = false;
+    }
+
+
+    public override Method CloneMethod(Method m) {
+      Contract.Requires(m != null);
+      Method method = m switch {
+        Constructor constructor => null,
+        LeastLemma leastLemma => null,
+        GreatestLemma greatestLemma => null,
+        Lemma lemma => null,
+        TwoStateLemma lemma => null,
+        _ => new Method(this, m)
+      };
+      if (method != null) {
+        if (this.in_class) {
+          method.Ins.Add(new Formal(Token.NoToken, "arg_valid", new UserDefinedType(Token.NoToken, this.class_name, this.typeArgs), true, false, null));
+          if (this.autocontracts) {
+            Expression inn = new ExprDotName(null, new IdentifierExpr(Token.NoToken, "arg_valid"), "Repr", new List<Type>());
+            method.Mod.Expressions.Add(new FrameExpression(null, inn, null));
+            AttributedExpression req = new AttributedExpression(
+              new FunctionCallExpr(
+                m.tok, // IToken tok, 
+                "Valid", // string fn,
+                new IdentifierExpr(m.tok, "arg_valid"), //Expression receiver, 
+                m.tok, // OpenParen 
+                m.tok, // CloseParen
+                new List<Expression>() // [Captured] List<Expression> args,
+                // Label /*?*/ atLabel = null
+              )
+            );
+            method.Req.Insert(0, req);
+            AttributedExpression ens = new AttributedExpression(
+              new FunctionCallExpr(
+                m.tok, // IToken tok, 
+                "Valid", // string fn,
+                new IdentifierExpr(m.tok, "arg_valid"), //Expression receiver, 
+                m.tok, // OpenParen 
+                m.tok, // CloseParen
+                new List<Expression>() // [Captured] List<Expression> args,
+                // Label /*?*/ atLabel = null
+              )
+            );
+            method.Ens.Insert(0, ens);
+          }
+        }
+        method.NameNode = new Name(method.Name + "_valid"); 
+      }
+      return method;
+    }
+
+    public override Field CloneField(Field f) {
+      if (this.in_class) {
+        return null;
+      }
+      return base.CloneField(f);
+    }
+
+
+    public override Function CloneFunction(Function f, string newName = null) {
+      if (this.in_class) {
+        return null;
+      }
+      Function f1 = base.CloneFunction(f, newName);
+      f1.NameNode = new Name(f1.Name + "_valid");
+      return f1;
+    }
+
+    public override BlockStmt CloneMethodBody(Method m) {
+      if (m is not Constructor && m is not LeastLemma && m is not GreatestLemma && m is not Lemma && m is not TwoStateLemma && m.Body != null) {
+        List <Expression> args = new List<Expression>();
+        for (int i = 0; i < m.Ins.Count; i++) {
+          args.Add(new IdentifierExpr(m.tok, m.Ins[i].Name)
+            { Var = m.Ins[i], Type = m.Ins[i].Type });
+        } 
+        List <Expression> lhs = new List<Expression>();
+        for (int i = 0; i < m.Outs.Count; i++) {
+          lhs.Add(new IdentifierExpr(m.tok, m.Outs[i].Name)
+            { Var = m.Outs[i], Type = m.Outs[i].Type });
+        }  
+        List <AssignmentRhs> rhs = new List<AssignmentRhs>();
+
+        if (this.in_class) {
+          rhs.Add(new ExprRhs(new FunctionCallExpr(
+            m.tok, // IToken tok, 
+            m.Name, // string fn,
+            new IdentifierExpr(m.tok, "arg_valid"), //Expression receiver, 
+            m.tok, // OpenParen 
+            m.tok, // CloseParen
+            args // [Captured] List<Expression> args,
+            // Label /*?*/ atLabel = null
+          )));
+
+        } else {
+          rhs.Add(new ExprRhs(new FunctionCallExpr(
+            m.tok, // IToken tok, 
+            m.Name, // string fn,
+            new StaticReceiverExpr(m.tok, null, true), //Expression receiver, 
+            m.tok, // OpenParen 
+            m.tok, // CloseParen
+            args // [Captured] List<Expression> args,
+            // Label /*?*/ atLabel = null
+          )));
+        }
+        Statement stmt1 = new UpdateStmt(m.RangeToken, lhs, rhs);
+        
+        List <Statement> body = new List<Statement>();  
+        body.Add(stmt1);
+
+        return new BlockStmt(Tok(m.Body.RangeToken), body);
+      } else {
+        return base.CloneMethodBody(m);
+      }
+    }
+
+
+    public override ModuleDefinition CloneModuleDefinition(ModuleDefinition m, ModuleDefinition newParent) {
+      return CloneModuleDefinition(m, newParent, m.NameNode);
+    }
+
+    public override ModuleDefinition CloneModuleDefinition(ModuleDefinition m, ModuleDefinition newParent, Name name) {
+      if (m is DefaultModuleDefinition defaultModuleDefinition) {
+        var result = new DefaultModuleDefinition(this, defaultModuleDefinition) {
+          EnclosingModule = newParent
+        };
+        return result;
+      }
+
+      path.Add(name);
+
+      ModuleDefinition module = new ModuleDefinition(this, m, new Name (name.Value + "_valid")) {
+        EnclosingModule = newParent
+      };
+
+      module.ResolvedPrefixNamedModules.Add(new AliasModuleDecl(
+        this.options,// DafnyOptions options, 
+        RangeToken.NoToken, // RangeToken rangeToken, 
+        new ModuleQualifiedId(new List<Name>(path)),// ModuleQualifiedId path, 
+        name,// Name name,
+        module,// ModuleDefinition parent, 
+        true,// bool opened, 
+        new List<IToken>(),// List<IToken> exports,
+        Guid.NewGuid()// Guid cloneId
+      ));
+
+      path.RemoveAt(path.Count - 1);
+
+      return module;
+    }
+
+    private Type ConvertTypeParam(TypeParameter typeParameter) {
+      return new UserDefinedType(Token.NoToken, typeParameter.Name, typeParameter.TypeArgs.ConvertAll(ConvertTypeParam));
+    }
+
+
+    public override TopLevelDecl CloneDeclaration(TopLevelDecl d, ModuleDefinition newParent) {
+      Contract.Requires(d != null);
+      Contract.Requires(newParent != null);
+
+      if (d is AbstractTypeDecl) {
+        return null;
+      } else if (d is AbstractModuleDecl) {
+        var sourcefacade = (AbstractModuleDecl)d;
+        List<Name> path = new List<Name>();
+        path.Add(new Name("Gen"));
+        path.AddRange(sourcefacade.QId.Path);
+        return new AbstractModuleDecl(
+          sourcefacade.Options, 
+          sourcefacade.RangeToken,
+          new ModuleQualifiedId(new List<Name>(path)),
+          sourcefacade.NameNode,
+          sourcefacade.EnclosingModuleDefinition,
+          sourcefacade.Opened,
+          sourcefacade.Exports,
+          sourcefacade.CloneId
+        );
+      } else if (d is AliasModuleDecl) {
+        var sourcefacade = (AliasModuleDecl)d;
+        List<Name> path = new List<Name>();
+        path.Add(new Name("Gen"));
+        path.AddRange(sourcefacade.TargetQId.Path);
+        return new AliasModuleDecl(
+          sourcefacade.Options, 
+          sourcefacade.RangeToken,
+          new ModuleQualifiedId(new List<Name>(path)),
+          sourcefacade.NameNode,
+          sourcefacade.EnclosingModuleDefinition,
+          sourcefacade.Opened,
+          sourcefacade.Exports,
+          sourcefacade.CloneId
+        );
+      } else if (d is ModuleExportDecl) {
+        return null;
+      } else if (d is SubsetTypeDecl) {
+        return null;
+      } else if (d is TypeSynonymDecl) {
+        return null;
+      } else if (d is NewtypeDecl) {
+        return null;
+      } else if (d is TupleTypeDecl) {
+        // Tuple type declarations only exist in the system module. Therefore, they are never cloned.
+        Contract.Assert(false);
+        throw new cce.UnreachableException();
+      } else if (d is DatatypeDecl) {
+        return null;
+      } else if (d is ClassDecl) {
+        var dd = (ClassDecl)d;
+        var tps1 = dd.TypeArgs.ConvertAll(CloneTypeParam);
+        var tps = dd.TypeArgs.ConvertAll(CloneTypeParam);
+        this.in_class = true;
+        this.class_name = dd.Name;
+
+        // Console.WriteLine("Class");
+        // Console.WriteLine(tps1.Count);
+        // foreach (var tp in tps1) {
+        //   Console.WriteLine("{0} :", tp.Name);
+        //   foreach (var typeArg in tp.TypeArgs) {
+        //     Console.WriteLine(typeArg.Name);
+        //   }
+        // }
+
+        //  new UserDefinedType(Token.NoToken, this.class_name, this.typeArgs)
+        this.typeArgs = tps1.ConvertAll<Type>(type => ConvertTypeParam(type)
+          // new UserDefinedType(Token.NoToken, type.Name, type.TypeArgs)
+        ); // new ParamTypeProxy
+
+        bool some_ref = false;
+        if (Attributes.ContainsBool(dd.Attributes, "autocontracts", ref some_ref)) {
+          this.autocontracts = true;
+          // better to delete the corresponding attribute
+        }
+
+        
+        var mm = filterMembers(dd.Members);
+
+        var classDecl = new ClassDecl(Range(dd.RangeToken), dd.NameNode.Clone(this), newParent, tps, mm,
+          CloneAttributes(dd.Attributes), dd.IsRefining, dd.ParentTraits.ConvertAll(CloneType));
+
+        this.in_class = false;
+
+        classDecl.NameNode = new Name(classDecl.Name + "_valid"); 
+
+        return classDecl;
+      } else {
+        return base.CloneDeclaration(d, newParent);
+      }
+    }
+
+    public override Attributes CloneAttributes(Attributes attrs) {
+      if (attrs == null) {
+        return null;
+      } else if (attrs.Name == "autocontracts") {
+        return CloneAttributes(attrs.Prev);
+      }
+      return base.CloneAttributes(attrs);
+    }
+
+    public override Expression CloneExpr(Expression expr) {
+      if (expr == null) {
+        return null;
+      }
+
+      if (expr is ICloneable<Expression> cloneableExpression) {
+        if (expr is ThisExpr e && this.in_class) {
+          return new IdentifierExpr(e.tok, "arg_valid");
+        }
+        return cloneableExpression.Clone(this);
+      }
+
+      throw new Exception($"No clone implementation found for {expr.GetType()}"); // unexpected expression
+    }
+
   }
 }

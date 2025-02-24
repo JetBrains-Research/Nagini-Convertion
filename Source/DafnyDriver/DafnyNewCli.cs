@@ -49,6 +49,7 @@ public static class DafnyNewCli {
     AddCommand(AuditCommand.Create());
     AddCommand(CoverageReportCommand.Create());
     AddCommand(DocumentationCommand.Create());
+    AddCommand(CreateValidatorsCommand.Create());
 
     // Check that the .doo file format is aware of all options,
     // and therefore which have to be saved to safely support separate verification/compilation.

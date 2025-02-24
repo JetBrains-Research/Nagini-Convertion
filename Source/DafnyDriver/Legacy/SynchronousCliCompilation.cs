@@ -241,7 +241,6 @@ namespace Microsoft.Dafny {
       DafnyOptions options, ProofDependencyManager depManager,
       bool lookForSnapshots = true, string programId = null) {
 
-      Console.WriteLine("AAAAAAAAAAAAAAAAAAA");
       Contract.Requires(cce.NonNullElements(dafnyFiles));
       var dafnyFileNames = DafnyFile.FileNames(dafnyFiles);
 
@@ -277,7 +276,6 @@ namespace Microsoft.Dafny {
       }
 
       string programName = dafnyFileNames.Count == 1 ? dafnyFileNames[0] : "the_program";
-      Console.WriteLine(programName);
       var (dafnyProgram, err) = await DafnyMain.ParseCheck(options.Input, dafnyFiles, programName, options);
       if (err != null) {
         exitValue = ExitValue.DAFNY_ERROR;
@@ -286,7 +284,6 @@ namespace Microsoft.Dafny {
           && options.DafnyVerify) {
 
 
-        Console.WriteLine(dafnyProgram);
 
         dafnyProgram.ProofDependencyManager = depManager;
         var boogiePrograms =
@@ -679,12 +676,6 @@ namespace Microsoft.Dafny {
       {
         var output = new ConcreteSyntaxTree();
 
-        Console.WriteLine(dafnyProgram.MainMethod);
-
-        foreach (KeyValuePair<ModuleDefinition, ModuleSignature> entry in dafnyProgram.ModuleSigs) {
-          Console.WriteLine("Key: {0}, Value: {1}", entry.Key, entry.Value.ModuleDef);
-        }
-
         await DafnyMain.LargeStackFactory.StartNew(() => compiler.Compile(dafnyProgram, dafnyProgramName, output));
 
         var writerOptions = new WriterState();
@@ -702,11 +693,9 @@ namespace Microsoft.Dafny {
         }
       }
       string callToMain = null;
-      Console.WriteLine(hasMain);
       if (hasMain) {
         var callToMainTree = new ConcreteSyntaxTree();
         string baseName = Path.GetFileNameWithoutExtension(dafnyProgramName);
-        Console.WriteLine(mainMethod);
         compiler.EmitCallToMain(mainMethod, baseName, callToMainTree);
         callToMain = callToMainTree.MakeString(compiler.TargetIndentSize); // assume there aren't multiple files just to call main
       }
@@ -721,12 +710,6 @@ namespace Microsoft.Dafny {
       // blurt out the code to a file, if requested, or if other target-language files were specified on the command line.
       if (options.SpillTargetCode > 0 || otherFileNames.Count > 0 || (invokeCompiler && !compiler.SupportsInMemoryCompilation) ||
           (invokeCompiler && compiler.TextualTargetIsExecutable && !options.RunAfterCompile)) {
-        Console.WriteLine("WriteDafnyProgramToFiles");
-        Console.WriteLine(targetProgramText);
-        foreach (KeyValuePair<string, string> entry in otherFiles) {
-          Console.WriteLine("Key: {0}, Value: {1}", entry.Key, entry.Value);
-        }
-        // Console.WriteLine(otherFiles);
         compiler.CleanSourceDirectory(targetPaths.SourceDirectory);
         WriteDafnyProgramToFiles(options, targetPaths, targetProgramHasErrors, targetProgramText, callToMain, otherFiles, outputWriter);
       }

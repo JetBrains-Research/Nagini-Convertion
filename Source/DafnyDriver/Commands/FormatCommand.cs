@@ -1,11 +1,18 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.CommandLine;
 using System.Diagnostics.Contracts;
 using System.IO;
 using System.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
 using System.Threading.Tasks;
 using DafnyCore;
+using DafnyCore.Options;
+using DafnyDriver.Commands;
+using Microsoft.Boogie;
+
 
 namespace Microsoft.Dafny;
 
@@ -101,43 +108,65 @@ Use '--print' to output the content of the formatted files instead of overwritin
       dafnyFile.GetContent = () => new StringReader(originalText);
       // Might not be totally optimized but let's do that for now
       var (dafnyProgram, err) = await DafnyMain.Parse(new List<DafnyFile> { dafnyFile }, programName, options);
-      if (err != null) {
-        exitValue = ExitValue.DAFNY_ERROR;
-        await errorWriter.WriteLineAsync(err);
-        failedToParseFiles.Add(dafnyFile.BaseName);
-      } else {
-        var firstToken = dafnyProgram.GetFirstTokenForUri(file.Uri);
-        var result = originalText;
-        if (firstToken != null) {
-          result = Formatting.__default.ReindentProgramFromFirstToken(firstToken,
-            IndentationFormatter.ForProgram(dafnyProgram, file.Uri));
-          if (result != originalText) {
-            neededFormatting += 1;
-            if (doCheck) {
-              exitValue = exitValue != ExitValue.DAFNY_ERROR ? ExitValue.FORMAT_ERROR : exitValue;
-            }
 
-            if (doCheck && (!doPrint || options.Verbose)) {
-              await options.OutputWriter.WriteLineAsync(
-                $"The file {options.GetPrintPath(dafnyFile.FilePath)} needs to be formatted");
-            }
 
-            if (!doCheck && !doPrint) {
-              SynchronousCliCompilation.WriteFile(dafnyFile.FilePath, result);
-            }
-          }
-        } else {
-          // TODO: is this necessary? there already is a warning about files containing no code
-          if (options.Verbose) {
-            await options.ErrorWriter.WriteLineAsync(dafnyFile.BaseName + " was empty.");
-          }
+      var compilation = CliCompilation.Create(options);
+      compilation.Start();
 
-          emptyFiles.Add(options.GetPrintPath(dafnyFile.FilePath));
-        }
-        if (doPrint) {
-          await options.OutputWriter.WriteAsync(result);
-        }
-      }
+      var resolution = await compilation.Resolution;
+      var tw = new StringWriter {
+        NewLine = "\n"
+      };
+      var pr = new Printer(tw, dafnyProgram.Options, PrintModes.Markup);
+      pr.PrintProgram(dafnyProgram, false);
+      SynchronousCliCompilation.WriteFile(dafnyFile.FilePath, tw.ToString());
+
+
+      // var tw1 = new StringWriter {
+      //   NewLine = "\n"
+      // };
+      // var pr1 = new Printer(tw1,  resolution.ResolvedProgram.Options, PrintModes.Serialization);
+      // pr1.PrintProgram(resolution.ResolvedProgram, false);
+      // Console.Write(tw1.ToString());
+
+
+      // if (err != null) {
+      //   exitValue = ExitValue.DAFNY_ERROR;
+      //   await errorWriter.WriteLineAsync(err);
+      //   failedToParseFiles.Add(dafnyFile.BaseName);
+      // } else {
+      //   var firstToken = dafnyProgram.GetFirstTokenForUri(file.Uri);
+      //   var result = originalText;
+      //   if (firstToken != null) {
+      //     result = Formatting.__default.ReindentProgramFromFirstToken(firstToken,
+      //       IndentationFormatter.ForProgram(dafnyProgram, file.Uri));
+      //     if (result != originalText) {
+      //       neededFormatting += 1;
+      //       if (doCheck) {
+      //         exitValue = exitValue != ExitValue.DAFNY_ERROR ? ExitValue.FORMAT_ERROR : exitValue;
+      //       }
+
+      //       if (doCheck && (!doPrint || options.Verbose)) {
+      //         await options.OutputWriter.WriteLineAsync(
+      //           $"The file {options.GetPrintPath(dafnyFile.FilePath)} needs to be formatted");
+      //       }
+
+      //       if (!doCheck && !doPrint) {
+      //         SynchronousCliCompilation.WriteFile(dafnyFile.FilePath, result);
+      //       }
+      //     }
+      //   } else {
+      //     // TODO: is this necessary? there already is a warning about files containing no code
+      //     if (options.Verbose) {
+      //       await options.ErrorWriter.WriteLineAsync(dafnyFile.BaseName + " was empty.");
+      //     }
+
+      //     emptyFiles.Add(options.GetPrintPath(dafnyFile.FilePath));
+      //   }
+      //   if (doPrint) {
+      //     await options.OutputWriter.WriteAsync(result);
+      //   }
+      // }
 
       if (tempFileName != null) {
         File.Delete(tempFileName);

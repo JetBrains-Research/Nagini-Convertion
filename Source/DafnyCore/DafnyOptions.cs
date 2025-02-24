@@ -317,6 +317,10 @@ namespace Microsoft.Dafny {
       TestedExterns,
     }
 
+    public bool AddPureCopiesOption = false;
+    public bool ValidatePure = false;
+    public bool ValidateLemmas = false;
+
     public PrintModes PrintMode = PrintModes.Everything; // Default to printing everything
     public bool DafnyVerify = true;
     public string DafnyPrintResolvedFile = null;

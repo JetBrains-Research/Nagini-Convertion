@@ -26,7 +26,7 @@ namespace Microsoft.Dafny {
     /// If the statement requires several lines, subsequent lines are indented at "indent".
     /// No newline is printed after the statement.
     /// </summary>
-    public void PrintStatement(Statement stmt, int indent) {
+    public void PrintStatement(Statement stmt, int indent, bool removeHints = false) {
       Contract.Requires(stmt != null);
 
       if (stmt.IsGhost && printMode == PrintModes.NoGhost) { return; }
@@ -42,6 +42,10 @@ namespace Microsoft.Dafny {
         Expression expr = ((PredicateStmt)stmt).Expr;
         var assertStmt = stmt as AssertStmt;
         var expectStmt = stmt as ExpectStmt;
+        if (removeHints) {
+          wr.WriteLine("// assert-start");
+          Indent(indent);
+        }
         wr.Write(assertStmt != null ? "assert" :
                  expectStmt != null ? "expect" :
                  "assume");
@@ -55,13 +59,18 @@ namespace Microsoft.Dafny {
         PrintExpression(expr, true);
         if (assertStmt != null && assertStmt.Proof != null) {
           wr.Write(" by ");
-          PrintStatement(assertStmt.Proof, indent);
+          PrintStatement(assertStmt.Proof, indent, false);
         } else if (expectStmt != null && expectStmt.Message != null) {
           wr.Write(", ");
           PrintExpression(expectStmt.Message, true);
           wr.Write(";");
         } else {
           wr.Write(";");
+        }
+        if (removeHints) {
+          wr.WriteLine();
+          Indent(indent);
+          wr.WriteLine("// assert-end");
         }
 
       } else if (stmt is PrintStmt) {
@@ -123,7 +132,7 @@ namespace Microsoft.Dafny {
         int ind = indent + IndentAmount;
         foreach (Statement s in sbs.BodyInit) {
           Indent(ind);
-          PrintStatement(s, ind);
+          PrintStatement(s, ind, removeHints);
           wr.WriteLine();
         }
         if (sbs.BodyProper.Count != 0 || sbs.SeparatorTok != null) {
@@ -131,7 +140,7 @@ namespace Microsoft.Dafny {
           wr.WriteLine("new;");
           foreach (Statement s in sbs.BodyProper) {
             Indent(ind);
-            PrintStatement(s, ind);
+            PrintStatement(s, ind, removeHints);
             wr.WriteLine();
           }
         }
@@ -143,7 +152,7 @@ namespace Microsoft.Dafny {
         int ind = indent + IndentAmount;
         foreach (Statement s in ((BlockStmt)stmt).Body) {
           Indent(ind);
-          PrintStatement(s, ind);
+          PrintStatement(s, ind, removeHints);
           wr.WriteLine();
         }
         Indent(indent);
@@ -151,7 +160,7 @@ namespace Microsoft.Dafny {
 
       } else if (stmt is IfStmt) {
         IfStmt s = (IfStmt)stmt;
-        PrintIfStatement(indent, s, false);
+        PrintIfStatement(indent, s, false, removeHints);
 
       } else if (stmt is AlternativeStmt) {
         var s = (AlternativeStmt)stmt;
@@ -160,7 +169,7 @@ namespace Microsoft.Dafny {
         if (s.UsesOptionalBraces) {
           wr.Write(" {");
         }
-        PrintAlternatives(indent + (s.UsesOptionalBraces ? IndentAmount : 0), s.Alternatives);
+        PrintAlternatives(indent + (s.UsesOptionalBraces ? IndentAmount : 0), s.Alternatives, removeHints);
         if (s.UsesOptionalBraces) {
           wr.WriteLine();
           Indent(indent);
@@ -168,7 +177,7 @@ namespace Microsoft.Dafny {
         }
       } else if (stmt is WhileStmt) {
         var s = (WhileStmt)stmt;
-        PrintWhileStatement(indent, s, false, false);
+        PrintWhileStatement(indent, s, false, false, removeHints);
       } else if (stmt is AlternativeLoopStmt) {
         var s = (AlternativeLoopStmt)stmt;
         wr.Write("while");
@@ -187,7 +196,7 @@ namespace Microsoft.Dafny {
           wr.Write("{");
         }
         Contract.Assert(s.Alternatives.Count != 0);
-        PrintAlternatives(indent + (s.UsesOptionalBraces ? IndentAmount : 0), s.Alternatives);
+        PrintAlternatives(indent + (s.UsesOptionalBraces ? IndentAmount : 0), s.Alternatives, removeHints);
         if (s.UsesOptionalBraces) {
           wr.WriteLine();
           Indent(indent);
@@ -196,7 +205,7 @@ namespace Microsoft.Dafny {
 
       } else if (stmt is ForLoopStmt) {
         var s = (ForLoopStmt)stmt;
-        PrintForLoopStatement(indent, s);
+        PrintForLoopStatement(indent, s, removeHints);
 
       } else if (stmt is ForallStmt) {
         var s = (ForallStmt)stmt;
@@ -225,7 +234,7 @@ namespace Microsoft.Dafny {
           }
         }
         if (s.Body != null) {
-          PrintStatement(s.Body, indent);
+          PrintStatement(s.Body, indent, removeHints);
         }
 
       } else if (stmt is ModifyStmt) {
@@ -272,7 +281,7 @@ namespace Microsoft.Dafny {
           // print the hints
           foreach (var st in h.Body) {
             Indent(lineInd);
-            PrintStatement(st, lineInd);
+            PrintStatement(st, lineInd, false);
             wr.WriteLine();
           }
         }
@@ -290,7 +299,7 @@ namespace Microsoft.Dafny {
 
           var savedDesugarMode = printingDesugared;
           printingDesugared = true;
-          Indent(indent); PrintStatement(s.Flattened, indent);
+          Indent(indent); PrintStatement(s.Flattened, indent, removeHints);
           wr.WriteLine();
           printingDesugared = savedDesugarMode;
 
@@ -320,7 +329,7 @@ namespace Microsoft.Dafny {
             foreach (Statement bs in mc.Body) {
               wr.WriteLine();
               Indent(caseInd + IndentAmount);
-              PrintStatement(bs, caseInd + IndentAmount);
+              PrintStatement(bs, caseInd + IndentAmount, removeHints);
             }
           }
           if (s.UsesOptionalBraces) {
@@ -355,7 +364,7 @@ namespace Microsoft.Dafny {
           foreach (Statement bs in mc.Body) {
             wr.WriteLine();
             Indent(caseInd + IndentAmount);
-            PrintStatement(bs, caseInd + IndentAmount);
+            PrintStatement(bs, caseInd + IndentAmount, removeHints);
           }
         }
 
@@ -376,15 +385,49 @@ namespace Microsoft.Dafny {
         if (s.Lhss.Count > 0) {
           wr.Write(" ");
         }
-        PrintUpdateRHS(s, indent);
+        bool isLemmaPrint = false;
+        if (s is UpdateStmt) { 
+          var s1 = (UpdateStmt)s;
+          if (s1.Lhss.Count == 0 && s1.Rhss.Count == 1) {
+            var rhs = s1.Rhss[0];
+            if (rhs is ExprRhs) {
+              var expr = ((ExprRhs)rhs).Expr;
+              if (expr is ApplySuffix) {
+                var e = (ApplySuffix)expr;
+                string name = e.Lhs is NameSegment ? ((NameSegment)e.Lhs).Name : e.Lhs is ExprDotName ? ((ExprDotName)e.Lhs).SuffixName : null;
+                if (name != null && this.lemmas.Contains(name)) {
+                  isLemmaPrint = removeHints;
+                }
+              }
+            }
+          }
+        }
+        if (isLemmaPrint) {
+          wr.WriteLine("// assert-start");
+          Indent(indent);
+        }
+        PrintUpdateRHS(s, indent, removeHints);
         wr.Write(";");
-
+        if (isLemmaPrint) {
+          wr.WriteLine();
+          Indent(indent);
+          wr.WriteLine("// assert-end");
+        }
       } else if (stmt is CallStmt) {
         // Most calls are printed from their concrete syntax given in the input. However, recursive calls to
         // prefix lemmas end up as CallStmt's by the end of resolution and they may need to be printed here.
         var s = (CallStmt)stmt;
+        bool comment = removeHints && (s.Method is ExtremeLemma || s.Method is PrefixLemma || s.Method is Lemma || s.Method is TwoStateLemma);
+        if (comment) {
+          wr.WriteLine("// assert-start");
+          Indent(indent);
+        }
         PrintExpression(s.MethodSelect, false);
         PrintActualArguments(s.Bindings, s.Method.Name, null);
+        if (comment) {
+          Indent(indent);
+          wr.WriteLine("// assert-end");
+        }
 
       } else if (stmt is VarDeclStmt) {
         var s = (VarDeclStmt)stmt;
@@ -442,9 +485,9 @@ namespace Microsoft.Dafny {
           Contract.Assert(s.ConditionOmitted);
           wr.Write("assume ...;");
         } else if (s.S is IfStmt) {
-          PrintIfStatement(indent, (IfStmt)s.S, s.ConditionOmitted);
+          PrintIfStatement(indent, (IfStmt)s.S, s.ConditionOmitted, removeHints);
         } else if (s.S is WhileStmt) {
-          PrintWhileStatement(indent, (WhileStmt)s.S, s.ConditionOmitted, s.BodyOmitted);
+          PrintWhileStatement(indent, (WhileStmt)s.S, s.ConditionOmitted, s.BodyOmitted, removeHints);
         } else if (s.S is ModifyStmt) {
           PrintModifyStmt(indent, (ModifyStmt)s.S, true);
         } else {
@@ -459,12 +502,12 @@ namespace Microsoft.Dafny {
 
         Indent(indent);
         wr.WriteLine("[[ try { ]]");
-        PrintStatement(haltRecoveryStatement.TryBody, ind);
+        PrintStatement(haltRecoveryStatement.TryBody, ind, removeHints);
         wr.WriteLine();
 
         Indent(indent);
         wr.WriteLine($"[[ }} recover ({haltRecoveryStatement.HaltMessageVar.Name}) {{ ]]");
-        PrintStatement(haltRecoveryStatement.RecoverBody, ind);
+        PrintStatement(haltRecoveryStatement.RecoverBody, ind, removeHints);
         wr.Write("[[ } ]]");
       } else {
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected statement
@@ -494,7 +537,7 @@ namespace Microsoft.Dafny {
           wr.Write(" {}");
         }
         wr.Write(" ");
-        PrintStatement(s.Body, indent);
+        PrintStatement(s.Body, indent, false);
       } else {
         wr.Write(";");
       }
@@ -504,7 +547,7 @@ namespace Microsoft.Dafny {
     /// Does not print LHS, nor the space one might want between LHS and RHS,
     /// because if there's no LHS, we don't want to start with a space
     /// </summary>
-    void PrintUpdateRHS(ConcreteUpdateStatement s, int indent) {
+    void PrintUpdateRHS(ConcreteUpdateStatement s, int indent, bool removeHints = false) {
       Contract.Requires(s != null);
       if (s is UpdateStmt) {
         var update = (UpdateStmt)s;
@@ -514,7 +557,7 @@ namespace Microsoft.Dafny {
         var sep = "";
         foreach (var rhs in update.Rhss) {
           wr.Write(sep);
-          PrintRhs(rhs);
+          PrintRhs(rhs, removeHints, indent);
           sep = ", ";
         }
       } else if (s is AssignSuchThatStmt) {
@@ -544,7 +587,7 @@ namespace Microsoft.Dafny {
           Indent(indent); wr.WriteLine("/*---------- desugared ----------");
           foreach (Statement r in stmt.ResolvedStatements) {
             Indent(indent);
-            PrintStatement(r, indent);
+            PrintStatement(r, indent, false);
             wr.WriteLine();
           }
           Indent(indent); wr.Write("---------- end desugared ----------*/");
@@ -555,7 +598,7 @@ namespace Microsoft.Dafny {
       }
     }
 
-    void PrintIfStatement(int indent, IfStmt s, bool omitGuard) {
+    void PrintIfStatement(int indent, IfStmt s, bool omitGuard, bool removeHints) {
       wr.Write("if");
       PrintAttributes(s.Attributes);
       wr.Write(" ");
@@ -565,18 +608,18 @@ namespace Microsoft.Dafny {
         PrintGuard(s.IsBindingGuard, s.Guard);
         wr.Write(" ");
       }
-      PrintStatement(s.Thn, indent);
+      PrintStatement(s.Thn, indent, removeHints);
       if (s.Els != null) {
         wr.Write(" else");
         if (!(s.Els is IfStmt) && s.Els.Attributes != null) {
           PrintAttributes(s.Els.Attributes);
         }
         wr.Write(" ");
-        PrintStatement(s.Els, indent);
+        PrintStatement(s.Els, indent, removeHints);
       }
     }
 
-    void PrintWhileStatement(int indent, WhileStmt s, bool omitGuard, bool omitBody) {
+    void PrintWhileStatement(int indent, WhileStmt s, bool omitGuard, bool omitBody, bool removeHints) {
       Contract.Requires(0 <= indent);
       wr.Write("while");
       PrintAttributes(s.Attributes);
@@ -587,9 +630,19 @@ namespace Microsoft.Dafny {
         PrintGuard(false, s.Guard);
       }
 
+      if (removeHints) {
+        wr.WriteLine();
+        Indent(indent + IndentAmount);
+        wr.WriteLine("// invariants-start");
+      }
       PrintSpec("invariant", s.Invariants, indent + IndentAmount);
       PrintDecreasesSpec(s.Decreases, indent + IndentAmount);
       PrintFrameSpecLine("modifies", s.Mod, indent + IndentAmount);
+      if (removeHints) {
+        wr.WriteLine();
+        Indent(indent + IndentAmount);
+        wr.WriteLine("// invariants-end");
+      }
       if (omitBody) {
         wr.WriteLine();
         Indent(indent + IndentAmount);
@@ -601,11 +654,11 @@ namespace Microsoft.Dafny {
           wr.WriteLine();
           Indent(indent);
         }
-        PrintStatement(s.Body, indent);
+        PrintStatement(s.Body, indent,removeHints);
       }
     }
 
-    void PrintAlternatives(int indent, List<GuardedAlternative> alternatives) {
+    void PrintAlternatives(int indent, List<GuardedAlternative> alternatives, bool removeHints) {
       var startWithLine = true;
       foreach (var alternative in alternatives) {
         if (startWithLine) {
@@ -627,12 +680,12 @@ namespace Microsoft.Dafny {
         foreach (Statement s in alternative.Body) {
           wr.WriteLine();
           Indent(indent + IndentAmount);
-          PrintStatement(s, indent + IndentAmount);
+          PrintStatement(s, indent + IndentAmount, removeHints);
         }
       }
     }
 
-    void PrintForLoopStatement(int indent, ForLoopStmt s) {
+    void PrintForLoopStatement(int indent, ForLoopStmt s, bool removeHints) {
       Contract.Requires(0 <= indent);
       Contract.Requires(s != null);
       wr.Write("for");
@@ -648,10 +701,20 @@ namespace Microsoft.Dafny {
         PrintExpression(s.End, false);
       }
 
+      if (removeHints) {
+        wr.WriteLine();
+        Indent(indent + IndentAmount);
+        wr.WriteLine("// invariants-start");
+      }
       PrintSpec("invariant", s.Invariants, indent + IndentAmount);
       PrintDecreasesSpec(s.Decreases, indent + IndentAmount);
       if (s.Mod.Expressions != null) {
         PrintFrameSpecLine("modifies", s.Mod, indent + IndentAmount);
+      }
+      if (removeHints) {
+        wr.WriteLine();
+        Indent(indent + IndentAmount);
+        wr.WriteLine("// invariants-end");
       }
       if (s.Body != null) {
         if (s.Invariants.Count == 0 && s.Decreases.Expressions.Count == 0 && (s.Mod.Expressions == null || s.Mod.Expressions.Count == 0)) {
@@ -660,11 +723,11 @@ namespace Microsoft.Dafny {
           wr.WriteLine();
           Indent(indent);
         }
-        PrintStatement(s.Body, indent);
+        PrintStatement(s.Body, indent,removeHints);
       }
     }
 
-    void PrintRhs(AssignmentRhs rhs) {
+    void PrintRhs(AssignmentRhs rhs, bool removeHints = false, int indent = -1) {
       Contract.Requires(rhs != null);
       if (rhs is ExprRhs) {
         PrintExpression(((ExprRhs)rhs).Expr, true);

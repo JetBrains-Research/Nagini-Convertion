@@ -156,7 +156,7 @@ namespace Microsoft.Dafny {
       } else if (expr is StmtExpr && isRightmost) {
         var e = (StmtExpr)expr;
         Indent(indent);
-        PrintStatement(e.S, indent);
+        PrintStatement(e.S, indent, false);
         wr.WriteLine();
         PrintExtendedExpr(e.E, indent, isRightmost, endWithCloseParen);
 
@@ -1107,7 +1107,7 @@ namespace Microsoft.Dafny {
         }
         if (parensNeeded) { wr.Write("("); }
         int ind = indent < 0 ? IndentAmount : indent;  // if the expression was to be printed on one line, instead print the .S part at indentation IndentAmount (not pretty, but something)
-        PrintStatement(e.S, ind);
+        PrintStatement(e.S, ind, false);
         wr.Write(" ");
         PrintExpression(e.E, !parensNeeded && isFollowedBySemicolon);
         if (parensNeeded) { wr.Write(")"); }

@@ -67,7 +67,7 @@ public class ModuleDefinition : RangeNode, IAttributeBearingDeclaration, IClonea
   [FilledInDuringResolution]
   public readonly List<TopLevelDecl> ResolvedPrefixNamedModules = new();
   [FilledInDuringResolution]
-  public readonly List<PrefixNameModule> PrefixNamedModules = new();  // filled in by the parser; emptied by the resolver
+  public List<PrefixNameModule> PrefixNamedModules = new();  // filled in by the parser; emptied by the resolver
 
   public CallRedirector CallRedirector { get; set; }
 
@@ -116,7 +116,10 @@ public class ModuleDefinition : RangeNode, IAttributeBearingDeclaration, IClonea
     ModuleKind = original.ModuleKind;
     Implements = original.Implements == null ? null : original.Implements with { Target = new ModuleQualifiedId(cloner, original.Implements.Target) };
     foreach (var d in original.SourceDecls) {
-      SourceDecls.Add(cloner.CloneDeclaration(d, this));
+      TopLevelDecl dd = cloner.CloneDeclaration(d, this);
+      if (dd != null) {
+        SourceDecls.Add(dd);
+      }
     }
 
     DefaultClass = (DefaultClassDecl)cloner.CloneDeclaration(original.DefaultClass, this);
